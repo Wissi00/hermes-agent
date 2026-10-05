@@ -1636,6 +1636,11 @@ def _run_conversation_turn(
     while (s.api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
         if _run_phase(begin_iteration, agent, s).action == "break":
             break
+        # Long single-turn runs (kanban workers, cron) never reach the turn-start restore:
+        # re-probe the primary between calls while a fallback is active.
+        from agent.fallback_hygiene import maybe_restore_midturn
+        if maybe_restore_midturn(agent):
+            s.active_system_prompt = _sync_failover_system_message(agent, None, s.active_system_prompt)
         _run_phase(prepare_iteration, agent, s)
         _run_phase(assemble_api_request, agent, s)
         _pg = _run_phase(run_preflight_gate, agent, s)

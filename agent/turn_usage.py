@@ -83,6 +83,9 @@ def record_response_usage(
     # Token/cost accounting below stays gated on real usage, but the request itself
     # must remain observable.
     agent.session_api_calls += 1
+    from agent.fallback_hygiene import note_api_call, note_call_succeeded
+    note_call_succeeded(agent)
+    note_api_call(agent)
     if not (hasattr(response, 'usage') and response.usage):
         if getattr(compressor, "awaiting_real_usage_after_compression", False):
             # No usage -> cannot adjudicate the prior compaction; consume the
@@ -202,12 +205,6 @@ def record_response_usage(
     _upstream = getattr(response, "provider", None)
     if isinstance(_upstream, str) and _upstream:
         _ident += f" upstream={_upstream}"
-    logger.info(
-        "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s%s",
-        agent.session_api_calls, agent.model, agent.provider or "unknown",
-        prompt_tokens, completion_tokens, total_tokens,
-        api_duration, _cache_pct, _ident,
-    )
     # nous.anthropic_wire=auto: the session's wire is decided once, from this first response.
     if agent.session_api_calls == 1 and (agent.provider or "") == "nous":
         with suppress(Exception):
@@ -243,6 +240,15 @@ def record_response_usage(
             _cost_delta = (_cost_delta or 0.0) + _moa_cost
     agent.session_cost_status = cost_result.status
     agent.session_cost_source = cost_result.source
+    # One line per served call, naming the route that ACTUALLY served it and what it cost: the
+    # usage dashboard attributes spend from these lines, not from the session's starting model.
+    _cost_txt = f" cost={_cost_delta:.6f}" if _cost_delta is not None else ""
+    logger.info(
+        "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s%s%s",
+        agent.session_api_calls, agent.model, agent.provider or "unknown",
+        prompt_tokens, completion_tokens, total_tokens,
+        api_duration, _cache_pct, _ident, _cost_txt,
+    )
 
     # Persist per-call token deltas for any session_id so non-CLI runs can't lose
     # accounting; gateway/session-store writes use absolute totals and safely overwrite

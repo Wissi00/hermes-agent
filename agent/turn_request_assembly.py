@@ -279,6 +279,8 @@ def assemble_api_request(
         request_pressure_tokens = _pressure_with_real_floor(
             agent.context_compressor, request_pressure_tokens
         )
+    # The fallback walk skips chain entries whose window this request would overflow.
+    agent._last_request_tokens = int(request_pressure_tokens or approx_tokens or 0)
     return AssembledRequest(
         "fallthrough", api_messages, tools_for_api, _moa_prepared_request,
         pending_moa_prepared_request, approx_tokens, request_pressure_tokens, approx_tokens * 4,

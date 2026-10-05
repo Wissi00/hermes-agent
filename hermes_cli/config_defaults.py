@@ -37,7 +37,21 @@ DEFAULT_CONFIG = {
     # min_switch_reset_seconds: opt-in (0 = off). When a rate-limited primary declares a reset
     # sooner than this many seconds, stay on it (the retry backoff rides out the window) instead
     # of switching the turn to a fallback model.
-    "fallback": {"min_switch_reset_seconds": 0},
+    # transient_retry_window_seconds: overloaded / 5xx / timeout failures retry the SAME route this
+    # long before the chain advances (rate limits and quota exhaustion advance at once). 0 = off.
+    # restore_probe_interval_seconds / restore_probe_every_calls: while a fallback is active, the
+    # primary (then each higher-ranked chain entry) is probed between API calls this often (wall
+    # time or calls, whichever first) and switched back in on the first success — long single-turn
+    # runs (kanban workers, cron) otherwise stay on the fallback to the end. 0 disables each clock.
+    # paid_lane_alert_channel: Discord channel id; engaging an OpenRouter non-:free model posts one
+    # line there, leaving it posts another. Empty = log only.
+    "fallback": {
+        "min_switch_reset_seconds": 0,
+        "transient_retry_window_seconds": 60,
+        "restore_probe_interval_seconds": 180,
+        "restore_probe_every_calls": 10,
+        "paid_lane_alert_channel": "",
+    },
     "credential_pool_strategies": {},
     "toolsets": ["hermes-cli"],
     # journal_mode: SQLite journal mode for every Hermes DB. "wal" default; use "delete" on
@@ -746,6 +760,9 @@ DEFAULT_CONFIG = {
         # ":free" — a PAID lane is never used for background aux traffic even with
         # OPENROUTER_API_KEY set.
         "free_only": False,
+        # When false, the auxiliary auto-detect chains (text and vision) never pick OpenRouter on
+        # their own; it stays reachable only where a task or the main model names it explicitly.
+        "openrouter_fallback": True,
         # Override the auto-chain's OpenRouter fallback model (default google/gemini-3.6-flash,
         # PAID). Pair e.g. "nvidia/nemotron-3-ultra-550b-a55b:free" with free_only: true. A one-time
         # WARNING is logged whenever a non-":free" model is engaged.

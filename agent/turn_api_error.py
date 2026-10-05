@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from agent.api_error_summary import is_provider_stream_parse_error
 from agent.error_classifier import RETRYABLE_CLIENT_REASONS, FailoverReason, classify_api_error
+from agent.fallback_hygiene import transient_window_open
 from agent.turn_overflow import recover_from_overflow
 from agent.turn_recovery import (
     _NONRETRYABLE_LABELS, abort_turn_on_interrupt, compute_error_backoff, interruptible_backoff_sleep,
@@ -353,6 +354,11 @@ def settle_unrecovered_error(
             base_url=_base, model=_model, delivered=_delivered,
         ))
 
+    # Transient outage (overloaded / 5xx / timeout): keep retrying the SAME route with backoff
+    # until its retry window closes; only then advance the fallback chain. The retry counter
+    # is pinned at its last slot so the backoff below runs and the loop comes back here.
+    if retry_count >= max_retries and transient_window_open(agent, classified.reason):
+        retry_count = max_retries - 1
     if retry_count >= max_retries:
         # Before fallback, rebuild the primary client once per API call block for
         # transient transport errors (stale pool, TCP reset).
