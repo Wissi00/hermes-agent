@@ -25,7 +25,9 @@ from gateway.status import get_process_start_time
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
 from hermes_cli import kanban_db_dispatch as kbd
-from hermes_cli.quiet_single_query import KANBAN_WORKER_EXIT_TRAILER, exit_single_query
+from hermes_cli.quiet_single_query import (
+    KANBAN_WORKER_EXIT_TRAILER, KANBAN_WORKER_RUN_TRAILER, exit_single_query,
+)
 
 # One second of start-time drift, in fingerprint units (Linux ticks / psutil centiseconds).
 ONE_SECOND_DRIFT = 100
@@ -84,9 +86,9 @@ def _running_with_stale_rate_limit_trailer(conn, pid: int, fingerprint: "str | N
     log = kb.worker_log_path(tid)
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
-        # Previous worker: legacy untagged trailer AND a tagged one for an earlier run.
+        # Previous workers: a legacy untagged trailer AND a run-fenced one for another run.
         f.write(f"older run output\n\n{KANBAN_WORKER_EXIT_TRAILER}75\n")
-        f.write(f"older run output\n\n{KANBAN_WORKER_EXIT_TRAILER}75 run={int(prev_run) + 1000}\n")
+        f.write(f"older run output\n\n{KANBAN_WORKER_RUN_TRAILER}{int(prev_run) + 1000}\n{KANBAN_WORKER_EXIT_TRAILER}75\n")
         f.write("current worker is still writing tool output...\n")
     return tid
 
@@ -143,7 +145,7 @@ def test_dead_worker_books_its_own_tagged_rate_limit_trailer(board, monkeypatch)
     tid = _running_with_stale_rate_limit_trailer(board, 70124, None)
     run_id = board.execute("SELECT current_run_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
     with open(kb.worker_log_path(tid), "a", encoding="utf-8") as f:
-        f.write(f"\n{KANBAN_WORKER_EXIT_TRAILER}75 run={run_id}\n")
+        f.write(f"\n{KANBAN_WORKER_RUN_TRAILER}{run_id}\n{KANBAN_WORKER_EXIT_TRAILER}75\n")
 
     kbd.detect_crashed_workers(board)
 
@@ -158,4 +160,7 @@ def test_exit_trailer_carries_the_run_id(monkeypatch, capsys):
     monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "124")
     with pytest.raises(SystemExit):
         exit_single_query(kb.KANBAN_RATE_LIMIT_EXIT_CODE)
-    assert f"{KANBAN_WORKER_EXIT_TRAILER}75 run=124" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert f"{KANBAN_WORKER_RUN_TRAILER}124\n{KANBAN_WORKER_EXIT_TRAILER}75\n" in err
+    # The rc line keeps its legacy shape, so a dispatcher still running older code parses it.
+    assert err.rstrip().endswith(f"{KANBAN_WORKER_EXIT_TRAILER}75")
