@@ -25,7 +25,7 @@ from typing import Mapping
 from typing import Optional
 from typing import TYPE_CHECKING
 
-from hermes_cli.quiet_single_query import KANBAN_WORKER_EXIT_TRAILER
+from hermes_cli.quiet_single_query import KANBAN_WORKER_EXIT_TRAILER, KANBAN_WORKER_RUN_TRAILER
 
 if TYPE_CHECKING:
     from hermes_cli.kanban_db import Task
@@ -258,7 +258,9 @@ def _exit_code_kind(code: int) -> "tuple[str, int]":
 
 
 _EXIT_TRAILER_RE = re.compile(
-    r"^" + re.escape(KANBAN_WORKER_EXIT_TRAILER) + r"(\d+)(?: run=(\d+))?\s*$", re.MULTILINE,
+    r"(?:^" + re.escape(KANBAN_WORKER_RUN_TRAILER) + r"(\d+)[ \t]*\r?\n)?"
+    r"^" + re.escape(KANBAN_WORKER_EXIT_TRAILER) + r"(\d+)\s*$",
+    re.MULTILINE,
 )
 
 
@@ -271,7 +273,7 @@ def _worker_log_exit_code(
     (``hermes_cli.quiet_single_query.exit_single_query``), so it is there whether
     or not the process running this sweep ever reaped the worker. Last trailer
     wins — the log is append-mode across re-runs. With ``run_id`` only a trailer
-    tagged ``run=<run_id>`` counts: an untagged or other-run trailer belongs to an
+    preceded by ``[kanban-worker-run] id=<run_id>`` counts: an untagged or other-run trailer belongs to an
     EARLIER worker, and reading it booked a live worker's run as that earlier
     run's rate-limit exit (t_a3485a28 run 124 inherited run 122's ``rc=75``).
     """
@@ -281,8 +283,8 @@ def _worker_log_exit_code(
         return None
     matches = _EXIT_TRAILER_RE.findall(raw or "")
     if run_id is not None:
-        matches = [m for m in matches if m[1] and int(m[1]) == int(run_id)]
-    return int(matches[-1][0]) if matches else None
+        matches = [m for m in matches if m[0] and int(m[0]) == int(run_id)]
+    return int(matches[-1][1]) if matches else None
 
 
 def reap_worker_zombies() -> "list[int]":

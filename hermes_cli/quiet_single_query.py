@@ -28,6 +28,8 @@ _MAX_QUIET_NOTIFY_ROUNDS = 8
 # instead, so a clean exit without a terminal board call is booked as the same protocol violation
 # (and a 75 as the same rate-limit requeue) whichever process notices the death.
 KANBAN_WORKER_EXIT_TRAILER = "[kanban-worker-exit] rc="
+# Line written right before the exit trailer: ``[kanban-worker-run] id=<task_runs.id>``.
+KANBAN_WORKER_RUN_TRAILER = "[kanban-worker-run] id="
 
 
 def exit_single_query(code: int) -> None:
@@ -36,11 +38,12 @@ def exit_single_query(code: int) -> None:
         with contextlib.suppress(Exception):
             # stderr: stdout may be the ``--stream-json`` record stream, and the worker log
             # captures both streams.
-            # `` run=<id>`` fences the trailer to this run: the log is append-mode across
-            # re-runs, so an earlier run's trailer must never book a later run's exit.
+            # The run-id line fences the trailer to this run: the log is append-mode across
+            # re-runs, so an earlier run's trailer must never book a later run's exit. It
+            # sits on its OWN line so the rc line keeps the format older dispatchers parse.
             run_id = (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip()
-            run_tag = f" run={run_id}" if run_id.isdigit() else ""
-            print(f"\n{KANBAN_WORKER_EXIT_TRAILER}{int(code)}{run_tag}", file=sys.stderr, flush=True)
+            run_line = f"\n{KANBAN_WORKER_RUN_TRAILER}{run_id}" if run_id.isdigit() else ""
+            print(f"{run_line}\n{KANBAN_WORKER_EXIT_TRAILER}{int(code)}", file=sys.stderr, flush=True)
     sys.exit(code)
 
 
