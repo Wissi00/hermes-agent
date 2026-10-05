@@ -89,3 +89,18 @@ def test_unset_effort_default_keeps_the_field_off_where_it_would_be_wrong():
         from agent.reasoning_params import unset_reasoning_default
         assert unset_reasoning_default(_Agent(None, api_mode="anthropic_messages")) is None
 
+
+def test_custom_route_reads_the_catalog_of_the_vendor_its_base_url_names():
+    """provider=custom + api.mistral.ai: ministral-8b is non-reasoning in the mistral catalog, so the
+    medium default stays off the wire (Mistral 400s "reasoning_effort is not enabled for this model")."""
+    def _caps(provider, model, allow_network=False):
+        return ModelCapabilities(supports_reasoning=False) if provider == "mistral" else None
+
+    agent = _Agent(None, provider="custom")
+    agent.model = "ministral-8b-latest"
+    agent.base_url = "https://api.mistral.ai/v1/"
+    with patch("agent.models_dev.get_model_capabilities", _caps):
+        assert _wire_reasoning_config(agent) is None
+        # An unknown relay host still gets the medium default.
+        assert _custom_wire_field(_wire_reasoning_config(_Agent(None, provider="custom"))) == "medium"
+

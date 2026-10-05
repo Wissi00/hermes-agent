@@ -566,7 +566,10 @@ def is_reasoning_field_rejection(error_msg: str) -> bool:
     if token is None:
         return False
     near = msg[max(0, token.start() - 32):token.end() + 32]
-    return "unsupported" in near or any(m in msg for m in UNSUPPORTED_PARAM_MARKERS)
+    # Mistral (code 3051) on a non-reasoning model such as ministral-8b: "reasoning_effort is not
+    # enabled for this model" — field-level, so the dropped-field retry is the cure.
+    return ("unsupported" in near or "not enabled for this model" in near
+            or any(m in msg for m in UNSUPPORTED_PARAM_MARKERS))
 
 
 def _billing_hints(error_msg: str) -> Verdict:
