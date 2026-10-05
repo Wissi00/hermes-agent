@@ -98,8 +98,33 @@ def test_decompose_worktree_children_get_own_workspace(kanban_home):
             ).fetchone()
             assert row["workspace_kind"] == "worktree"
             # Each child resolves its own <repo>/.worktrees/<child-id> at
-            # dispatch; the root's literal path must never be shared.
-            assert row["workspace_path"] is None
+            # dispatch from the root's REPO; the root's literal checkout path
+            # must never be shared.
+            assert row["workspace_path"] == "/repo"
+
+
+def test_decompose_worktree_children_dispatch_without_board_default(kanban_home, tmp_path):
+    """t_260e627a: a worktree root on a board with no default_workdir used to
+    spawn children with no workspace_path, so every child failed at spawn."""
+    repo = _make_repo(tmp_path)
+    root_wt = _add_worktree(repo, repo / ".worktrees" / "root", "wt/root")
+    with kbc.connect() as conn:
+        root = kb.create_task(conn, title="publish", triage=True)
+        conn.execute(
+            "UPDATE tasks SET workspace_kind='worktree', workspace_path=? WHERE id = ?",
+            (str(root_wt), root),
+        )
+        conn.commit()
+        [cid] = decompose_triage_task(
+            conn, root, root_assignee="orchestrator",
+            children=[{"title": "push it", "assignee": "bob", "parents": []}],
+            author="decomposer",
+        )
+        child = kb.get_task(conn, cid)
+    assert kb.read_board_metadata().get("default_workdir") in (None, "")
+    path, branch = kbw._resolve_worktree_workspace(child)
+    assert path == (repo / ".worktrees" / cid).resolve()
+    assert branch == f"wt/{cid}"
 
 
 

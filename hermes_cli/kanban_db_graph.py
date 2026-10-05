@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 def inherit_creator_origin(
@@ -166,6 +167,29 @@ def decompose_triage_task(
     return child_ids
 
 
+def _worktree_repo_anchor(root_path: Optional[str]) -> Optional[str]:
+    """Repo anchor a decomposed worktree child can dispatch from, derived from
+    the root's worktree path without git calls (we are inside a write txn).
+
+    ``<repo>/.worktrees/<id>`` -> ``<repo>`` (dispatch then materializes
+    ``<repo>/.worktrees/<child-id>``). Any other existing absolute path is
+    passed through: dispatch anchors a repo root and falls back to a fresh
+    ``.worktrees/<child-id>`` for another task's linked checkout. Relative or
+    missing paths give ``None`` (board ``default_workdir`` decides).
+    """
+    if not root_path:
+        return None
+    path = Path(root_path).expanduser()
+    if not path.is_absolute():
+        return None
+    parts = path.parts
+    if ".worktrees" in parts:
+        idx = parts.index(".worktrees")
+        if idx > 0:
+            return str(Path(*parts[:idx]))
+    return str(path) if path.exists() else None
+
+
 def _insert_decomposed_child(
     conn: sqlite3.Connection, root_id: str, root_row: sqlite3.Row, child: dict,
     author: Optional[str], now: int,
@@ -189,7 +213,12 @@ def _insert_decomposed_child(
     if child.get("workspace_path"):
         child_ws_path = child.get("workspace_path")
     elif child_ws_kind == "worktree":
-        child_ws_path = None
+        # Never the root's checkout itself, but keep its repo as the anchor:
+        # with no path at all dispatch needs a board default_workdir, and a
+        # board without one fails every child at spawn (t_260e627a).
+        child_ws_path = _worktree_repo_anchor(
+            root_row["workspace_path"] if root_ws_kind == "worktree" else None
+        )
     elif child_ws_kind == root_ws_kind:
         child_ws_path = root_row["workspace_path"]
     else:

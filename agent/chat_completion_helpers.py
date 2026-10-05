@@ -1975,6 +1975,11 @@ def _should_skip_fallback_candidate(agent, fb: dict, fb_key: tuple, fb_provider:
     if _candidate_pool_exhausted(agent, fb_provider, fb_model):
         logger.warning("Fallback skip: %s/%s credential pool is exhausted (every entry in cooldown)", fb_provider, fb_model)
         return True
+    # Not added to ``unavailable``: the request may shrink (compression) and fit again later.
+    from agent.fallback_hygiene import entry_too_small
+    from hermes_cli.fallback_config import resolve_entry_api_key
+    if entry_too_small(agent, fb_provider, fb_model, (fb.get("base_url") or "").strip(), resolve_entry_api_key(fb) or ""):
+        return True
     local_skip_reason = _fallback_entry_unavailable_without_network(agent, fb)
     if local_skip_reason:
         unavailable.add(fb_key)
@@ -2079,6 +2084,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
     if switch_deferred_by_reset(agent, reason, reset_at):
         return False
     cooldown_seconds = _arm_rate_limit_cooldown(agent, reason, reset_at=reset_at)
+    leaving_primary = not getattr(agent, "_fallback_activated", False)
     while True:
         if agent._fallback_index >= len(agent._fallback_chain):
             return _fallback_chain_exhausted(agent, reason)
@@ -2107,8 +2113,10 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
                 from agent.secret_scope import get_secret
                 fb_api_key_hint = get_secret("OLLAMA_API_KEY") or None
             # raw_codex=True: the main agent needs direct responses.stream() access for Codex providers.
-            fb_client, _resolved_fb_model = resolve_provider_client(
-                fb_provider, model=fb_model, raw_codex=True, explicit_base_url=fb_base_url_hint, explicit_api_key=fb_api_key_hint, api_mode=fb_api_mode)
+            from agent.fallback_hygiene import main_route_resolution
+            with main_route_resolution():
+                fb_client, _resolved_fb_model = resolve_provider_client(
+                    fb_provider, model=fb_model, raw_codex=True, explicit_base_url=fb_base_url_hint, explicit_api_key=fb_api_key_hint, api_mode=fb_api_mode)
             if fb_client is None:
                 logger.warning("Fallback to %s failed: provider not configured", fb_provider)
                 unavailable.add(fb_key)
@@ -2183,6 +2191,9 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
             agent._provider_fallback_active = True
             agent._provider_fallback_route = (str(fb_model), str(fb_provider))
             _log_fallback_activated(agent, reason, old_model, old_provider, fb_model, fb_provider)
+            from agent.fallback_hygiene import note_route_change
+            note_route_change(agent, new_model=fb_model, new_provider=fb_provider, reason=reason,
+                              leaving_primary=leaving_primary)
             from hermes_cli.observability.shared_metrics_events import record_fallback
             record_fallback(from_provider=old_provider, to_provider=fb_provider, reason=reason)
             # The stale-call streak measured the OLD provider; carrying it over would

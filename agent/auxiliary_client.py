@@ -2321,6 +2321,15 @@ def _warn_paid_lane_once(model: str) -> None:
     )
 
 
+def _alert_openrouter_engaged(model: str) -> None:
+    """Paid-lane guard: OpenRouter is out of the fallback chains, so engaging it is alerted."""
+    try:
+        from agent.fallback_hygiene import note_aux_openrouter
+        note_aux_openrouter(model)
+    except Exception:
+        logger.debug("OpenRouter paid-lane alert failed", exc_info=True)
+
+
 def _try_openrouter(explicit_api_key: Optional[Union[str, Callable[[], str]]] = None, model: str = None,
                     explicit_base_url: Optional[str] = None) -> Tuple[Optional[OpenAI], Optional[str]]:
     free_only, cfg_model = _aux_openrouter_settings()
@@ -2344,6 +2353,7 @@ def _try_openrouter(explicit_api_key: Optional[Union[str, Callable[[], str]]] = 
         if or_key:
             base_url = override_url or _pool_runtime_base_url(entry, OPENROUTER_BASE_URL) or OPENROUTER_BASE_URL
             logger.debug("Auxiliary client: OpenRouter via pool")
+            _alert_openrouter_engaged(or_model)
             return _create_openai_client(
                 api_key=or_key, base_url=base_url, default_headers=build_or_headers()
             ), or_model
@@ -2355,6 +2365,7 @@ def _try_openrouter(explicit_api_key: Optional[Union[str, Callable[[], str]]] = 
             "openrouter", ttl=60, reason=_describe_openrouter_unavailable(or_model), level=logging.DEBUG)
         return None, None
     logger.debug("Auxiliary client: OpenRouter")
+    _alert_openrouter_engaged(or_model)
     return _create_openai_client(
         api_key=or_key, base_url=override_url or OPENROUTER_BASE_URL, default_headers=build_or_headers()
     ), or_model
@@ -3150,15 +3161,29 @@ def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str,
     return normalized
 
 
+def openrouter_auto_allowed() -> bool:
+    """``auxiliary.openrouter_fallback`` (default true): may the auto-detect chains pick OpenRouter
+    on their own? False keeps OpenRouter reachable only when a task or the main model names it
+    explicitly — no background aux call ever lands on it as a fallback."""
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+        return bool(cfg_get(load_config_readonly(), "auxiliary", "openrouter_fallback", default=True))
+    except Exception:
+        return True
+
+
 def _get_provider_chain() -> List[tuple]:
     """Ordered provider detection chain, built at call time so ``_try_*`` patches are picked up.
 
     ``openai-codex`` is deliberately absent (shifting allow-list breaks guessed-model fallback).
     """
-    return [
+    chain = [
         ("openrouter", _try_openrouter), ("nous", _try_nous),
         ("local/custom", _try_custom_endpoint), ("api-key", _resolve_api_key_provider),
     ]
+    if not openrouter_auto_allowed():
+        chain = [entry for entry in chain if entry[0] != "openrouter"]
+    return chain
 
 
 # "Recently 402'd" unhealthy-provider cache: a depleted provider stays so for hours, so hiding it
@@ -5551,6 +5576,13 @@ def get_text_auxiliary_client(task: str = "", *, main_runtime: Optional[Dict[str
 _VISION_AUTO_PROVIDER_ORDER = ("openrouter", "nous", "deepinfra")
 
 
+def _vision_auto_order() -> tuple:
+    """Vision auto-selection order, minus OpenRouter when ``auxiliary.openrouter_fallback`` is off."""
+    if openrouter_auto_allowed():
+        return _VISION_AUTO_PROVIDER_ORDER
+    return tuple(p for p in _VISION_AUTO_PROVIDER_ORDER if p != "openrouter")
+
+
 def _main_model_supports_vision(provider: str, model: Optional[str]) -> bool:
     """True when ``provider``/``model`` is known to accept image input; unknown capability → True (attempt the call)."""
     try:
@@ -5611,7 +5643,7 @@ def get_available_vision_backends() -> List[str]:
             main_ok = resolve_provider_client(main_provider, _read_main_model())[0] is not None
         if main_ok:
             available.append(main_provider)
-    for p in _VISION_AUTO_PROVIDER_ORDER:  # skip if already covered by main provider
+    for p in _vision_auto_order():  # skip if already covered by main provider
         if p not in available and _resolve_strict_vision_backend(p)[0] is not None:
             available.append(p)
     return available
@@ -5698,7 +5730,7 @@ def _vision_auto_route(
         if client is not None:
             return _finalize_vision_client(main_provider, client, default_model, resolved_model, async_mode)
     # Aggregators use their dedicated vision model, not the user's main model.
-    for candidate in _VISION_AUTO_PROVIDER_ORDER:
+    for candidate in _vision_auto_order():
         if candidate == main_provider:
             continue  # already tried above
         sync_client, default_model = _resolve_strict_vision_backend(candidate)

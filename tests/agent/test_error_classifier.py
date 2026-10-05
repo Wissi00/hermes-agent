@@ -982,6 +982,17 @@ class TestClassifyApiError:
         )
         assert overflow.reason == FailoverReason.context_overflow and overflow.should_compress is True
 
+    def test_mistral_reasoning_effort_not_enabled_is_reasoning_field_rejection(self):
+        """Mistral's 400 (code 3051) for reasoning_effort on ministral-8b must take the drop-the-field rung."""
+        body = {"object": "error", "message": "reasoning_effort is not enabled for this model",
+                "type": "invalid_request_invalid_args", "param": None, "code": "3051", "raw_status_code": 400}
+        msg = f"Error code: 400 - {body}"
+        assert is_reasoning_field_rejection(msg)
+        result = classify_api_error(MockAPIError(msg, status_code=400, body=body), provider="custom",
+                                    model="ministral-8b-latest")
+        assert result.reason == FailoverReason.reasoning_mandatory
+        assert result.retryable is True
+
     def test_openai_unsupported_none_effort_body_is_reasoning_mandatory(self):
         """OpenAI's real 400 for ``reasoning.effort: none`` on a model whose ladder has no ``none`` (o3/o4-mini,
         gpt-5/gpt-5-codex; ``none`` is gpt-5.1+): the SDK message carries the body — ``param: reasoning.effort``

@@ -43,6 +43,29 @@ def _cached_probe(agent, cache_attr: str, probe, unknown, definitive):
     return value
 
 
+def _catalog_provider_for_url(base_url: str) -> str | None:
+    """models.dev provider id for a custom endpoint: the known host map first, else the host's
+    registrable label (``api.mistral.ai`` -> ``mistral``). The caller only uses it for a catalog
+    lookup, so a label that names no catalog provider just returns no capabilities."""
+    if not base_url:
+        return None
+    try:
+        from agent.model_metadata import _infer_provider_from_url
+
+        inferred = _infer_provider_from_url(base_url)
+    except Exception:
+        inferred = None
+    if inferred:
+        return inferred
+    from urllib.parse import urlparse
+
+    host = (urlparse(base_url if "://" in base_url else f"//{base_url}").hostname or "").lower().rstrip(".")
+    labels = [p for p in host.split(".") if p]
+    if len(labels) < 2 or labels[-1].isdigit():  # bare host / IPv4: localhost, 127.0.0.1
+        return None
+    return labels[-2]
+
+
 def unset_reasoning_default(agent) -> dict | None:
     """Reasoning config for a main-loop request whose ``agent.reasoning_effort`` is unset.
 
@@ -71,6 +94,13 @@ def unset_reasoning_default(agent) -> dict | None:
         from agent.models_dev import get_model_capabilities
 
         caps = get_model_capabilities(provider, model, allow_network=False)
+        if caps is None:
+            # provider="custom" has no catalog of its own: look the model up under the vendor the
+            # base_url names (api.mistral.ai -> mistral), else ministral-8b got the medium default
+            # and Mistral 400'd every turn ("reasoning_effort is not enabled for this model").
+            catalog = _catalog_provider_for_url(str(getattr(agent, "base_url", "") or ""))
+            if catalog and catalog != provider:
+                caps = get_model_capabilities(catalog, model, allow_network=False)
     except Exception:
         caps = None
     if caps is not None and caps.supports_reasoning is False:
