@@ -42,10 +42,11 @@ def _dead_worker_with_log(conn, tid: str, pid: int, rc: int) -> None:
         (pid, int(time.time()) - 120, tid),
     )
     conn.commit()
+    run_id = conn.execute("SELECT current_run_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
     log = kb.worker_log_path(tid)
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
-        f.write(f"the model said something\n\nResume this session with:\n  hermes --resume x\n\n{KANBAN_WORKER_EXIT_TRAILER}{rc}\n")
+        f.write(f"the model said something\n\nResume this session with:\n  hermes --resume x\n\n{KANBAN_WORKER_EXIT_TRAILER}{rc} run={run_id}\n")
 
 
 @pytest.mark.parametrize(
@@ -140,6 +141,7 @@ def test_exit_single_query_writes_trailer_only_for_kanban_workers(monkeypatch, c
     assert KANBAN_WORKER_EXIT_TRAILER not in capsys.readouterr().err
 
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_1")
+    monkeypatch.delenv("HERMES_KANBAN_RUN_ID", raising=False)
     with pytest.raises(SystemExit) as exc:
         exit_single_query(kb.KANBAN_RATE_LIMIT_EXIT_CODE)
     assert exc.value.code == kb.KANBAN_RATE_LIMIT_EXIT_CODE
