@@ -142,10 +142,10 @@ VALID_HOOKS: Set[str] = {
     # platform, reason, invalidation_reason. Return values are ignored.
     "agent_loop_stopped",
     # Approval observers (tools/approval.py); returns ignored — plugins cannot veto or pre-answer
-    # (use pre_tool_call). Kwargs: command, description, pattern_key, pattern_keys, session_key,
-    # surface: "cli"|"gateway"|"smart"; post_approval_response adds choice ("once"|"session"|
-    # "always"|"deny"|"timeout"|"smart_approve"|"smart_deny") and decided_by.
-    "pre_approval_request", "post_approval_response",
+    # (use pre_tool_call). Kwargs: command, description, pattern_key, pattern_keys, session_key, surface;
+    # post_approval_response adds choice and decided_by. on_human_input_request/_resolved: any human prompt
+    # (kind sudo|clarify|approval), payload contract in tools/human_input_hooks.py and hooks.md.
+    "pre_approval_request", "post_approval_response", "on_human_input_request", "on_human_input_resolved",
     # on_room_member_activity: a hosted Group Chat member's live runtime events (tool.started/completed,
     # request.opened, message.delta, reasoning.delta, turn.error, ...) stamped with room_id, thread_id,
     # member_id, turn_id, task_id, execution_generation. Observer, queued per consumer off the token
