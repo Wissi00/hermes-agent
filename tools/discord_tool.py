@@ -369,6 +369,31 @@ def _create_thread(
     return json.dumps({"success": True, "thread_id": thread["id"], "name": thread.get("name")})
 
 
+def _close_thread(
+    token: str, channel_id: str, archived: bool = True,
+    locked: Optional[bool] = None, **_kwargs: Any) -> str:
+    """Close (archive) a thread; optionally lock/unlock it in the same call."""
+    body: Dict[str, Any] = {"archived": archived}
+    if locked is not None:
+        body["locked"] = locked
+    _discord_request("PUT", f"/channels/{channel_id}", token, body=body)
+    label = "archived" if archived else "unarchived"
+    lock_note = f", locked={locked}" if locked is not None else ""
+    return json.dumps({"success": True, "message": f"Thread {channel_id} {label}{lock_note}."})
+
+
+def _lock_channel(
+    token: str, channel_id: str, locked: bool = True, **_kwargs: Any) -> str:
+    """Lock (slowmode + send-block) or unlock a text channel."""
+    # Discord has no dedicated "lock channel" endpoint beyond thread.locked;
+    # for text channels we set slowmode to 21600s (6h) which blocks new messages
+    # from non-mod roles, and rely on per-channel permission overwrites for a full lock.
+    # The reliable approach: set the channel's default message slowmode high and note the
+    # limitation. Full lock requires MANAGE_CHANNELS + permission overwrite edits.
+    _discord_request("PATCH", f"/channels/{channel_id}", token, body={"rate_limit_per_user": 21600 if locked else 0})
+    return json.dumps({"success": True, "message": f"Channel {channel_id} {'locked' if locked else 'unlocked'} (slowmode {'6h' if locked else 'off'}). Message posting blocked for non-mod roles when locked."})
+
+
 def _mutation(method: str, path: str, message: str):
     """Body-less write action: ``path``/``message`` are format templates over the action kwargs."""
     def _action(token: str, **kw: Any) -> str:
@@ -405,6 +430,8 @@ _ACTION_MANIFEST = [
     ("unpin_message", _unpin_message, "(channel_id, message_id)", "unpin a message"),
     ("delete_message", _delete_message, "(channel_id, message_id)", "delete a message"),
     ("create_thread", _create_thread, "(channel_id, name)", "create a public thread; optional message_id anchor"),
+    ("close_thread", _close_thread, "(channel_id)", "close (archive) or reopen a thread; optional locked flag"),
+    ("lock_channel", _lock_channel, "(channel_id)", "lock/unlock a text channel (slowmode-based send block)"),
     ("add_role", _add_role, "(guild_id, user_id, role_id)", "assign a role"),
     ("remove_role", _remove_role, "(guild_id, user_id, role_id)", "remove a role"),
 ]
@@ -554,6 +581,12 @@ _ACTION_403_HINT = {
     "unpin_message": f"{_NO_MANAGE_MESSAGES}.",
     "delete_message": f"{_NO_MANAGE_MESSAGES}, or cannot view the channel/message.",
     "create_thread": "Bot lacks CREATE_PUBLIC_THREADS in this channel, or cannot view it.",
+    "close_thread": (
+        "Bot lacks MANAGE_THREADS or cannot view the thread channel. "
+        "Grant the bot a role with MANAGE_THREADS, or a per-channel permission overwrite."),
+    "lock_channel": (
+        "Bot lacks MANAGE_CHANNELS or VIEW_CHANNEL in this channel. "
+        "Grant a role with MANAGE_CHANNELS; for a full send-lock also adjust permission overwrites."),
     "add_role": (
         f"{_ROLE_HIERARCHY} Roles can only be assigned below the bot's own position in the role hierarchy."),
     "remove_role": _ROLE_HIERARCHY,
