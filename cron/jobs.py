@@ -2412,6 +2412,37 @@ def _record_run_outcome(
         job["run_claim"] = None
 
 
+# Pull a snapped interval slot this far ahead of the tick it targets, so ticker jitter (the tick
+# that dispatched the run stamps ``dispatched_at`` a few hundred ms after the tick began) never
+# leaves the slot a hair after the tick meant to fire it.
+INTERVAL_TICK_SNAP_LEAD_SECONDS = 2.0
+
+
+def _snap_interval_next_to_tick(job: Dict[str, Any], next_run: str, now: str) -> str:
+    """Snap an interval job's completion-anchored ``next_run_at`` to the nearest ticker slot.
+
+    ``next_run_at = completion + interval`` lands ``runtime`` seconds AFTER the fixed-rate tick at
+    ``dispatch + interval``. When the interval is a multiple of the tick, that slot is never due on
+    the tick meant to fire it, so the job waits one extra tick: an ``every 1m`` job whose run takes
+    4s fired every 2 minutes (30/60 runs per hour, ~56s late each time). The tick lattice is known
+    from this run's ``last_dispatch.dispatched_at``; round the target to the nearest tick on that
+    lattice (at most half a tick earlier or later than completion + interval), never before the
+    first tick after completion. Without a usable dispatch stamp the value is returned unchanged."""
+    dispatched = _parse_aware((job.get("last_dispatch") or {}).get("dispatched_at"))
+    target = _parse_aware(next_run)
+    finished = _parse_aware(now)
+    if dispatched is None or target is None or finished is None:
+        return next_run
+    if _instant_after(dispatched, finished):
+        return next_run  # clock skew / future stamp: no trustworthy lattice
+    tick = float(TICKER_INTERVAL_SECONDS)
+    ticks = max(1, round(_elapsed_seconds(target, dispatched) / tick))
+    snapped = _seconds_after(dispatched, ticks * tick - INTERVAL_TICK_SNAP_LEAD_SECONDS)
+    while not _instant_after(snapped, finished):
+        snapped = _seconds_after(snapped, tick)
+    return snapped.astimezone(target.tzinfo).isoformat()
+
+
 def _advance_after_run(job: Dict[str, Any], now: str, *, ladder_rung: bool = False) -> None:
     """Bump ``repeat.completed`` and recompute ``next_run_at``; retire the record as a terminal
     completion when the repeat limit is reached or a one-shot has no further run.
@@ -2444,6 +2475,8 @@ def _advance_after_run(job: Dict[str, Any], now: str, *, ladder_rung: bool = Fal
             return
 
     job["next_run_at"] = compute_next_run(job["schedule"], now)
+    if kind == "interval" and job["next_run_at"] is not None:
+        job["next_run_at"] = _snap_interval_next_to_tick(job, job["next_run_at"], now)
     if job["next_run_at"] is not None:
         if job.get("state") != "paused":
             job["state"] = "scheduled"
