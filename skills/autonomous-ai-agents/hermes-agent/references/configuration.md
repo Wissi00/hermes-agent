@@ -23,6 +23,25 @@ Full reference: https://hermes-agent.nousresearch.com/docs/user-guide/configurat
 
 `hermes config check` reports sections missing from an older config.
 
+### Compaction trigger (when auto-compression fires)
+
+Resolution order, most specific first; read it back instead of guessing:
+
+1. `compression.model_threshold_tokens` — absolute prompt-token trigger per model (substring,
+   `"<provider>:..."` or glob keys). Built in: `"gpt-*-sol*": 300000` (every GPT Sol model, every
+   profile, even with the key absent). Applies only when it leaves >= 15% of the input window free;
+   Sol on Codex OAuth (272K window) therefore keeps the ratio trigger (231,200 = 85% autoraise).
+   `hermes config set compression.model_threshold_tokens.<key> 0` disables a key.
+2. `compression.model_thresholds` (ratio per model) else `compression.threshold`, raised by the Codex
+   autoraise (`codex_gpt55_autoraise`) and the <512K floor (0.75).
+3. `compression.threshold_tokens` (global cap) and the aux summariser window only ever lower it.
+
+Readback: the startup line `Context limit: N tokens (compress at P% = T)`, `/context` in a chat, or
+`agent.context_compressor.threshold_tokens` / `.model_trigger_status` on a constructed `AIAgent`.
+Native Codex compaction: `codex_responses_native` (off by default) follows the local trigger;
+`codex_app_server_auto` only governs the `codex_app_server` runtime. Gateways rebuild cached agents
+when these keys change; a code change needs a gateway restart.
+
 ### Toolsets
 
 Enable/disable via `hermes tools` (interactive) or `hermes tools enable/disable NAME`.
