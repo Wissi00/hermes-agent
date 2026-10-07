@@ -706,6 +706,12 @@ compression:
   #   "claude-sonnet": 0.35
   #   "gpt-5": 0.30
 
+  # Per-model ABSOLUTE triggers (prompt tokens). Same keys as model_thresholds, plus
+  # globs. Built in: "gpt-*-sol*": 300000 (applies only when it leaves >= 15% of the
+  # input window free; Codex OAuth's 272K Sol window keeps the ratio). 0 disables a key.
+  # model_threshold_tokens:
+  #   "glm-5.2": 120000
+
   # Optional absolute token cap for the compression trigger (default: null = disabled).
   # When set, compression fires at the LOWER of the ratio-based threshold and this
   # absolute token count. Clamped to the model's context length at apply-time, so a

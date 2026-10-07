@@ -705,6 +705,10 @@ DEFAULT_CONFIG = {
         # scope it to one route ({"openai-codex:astra": 0.85} leaves Astra on OpenRouter/Nous at the
         # global value). The <512K floor (0.75) still applies raise-only on top.
         "model_thresholds": {},
+        # Per-model ABSOLUTE input-token triggers (keys as above, plus globs), layered over the built-in
+        # {"gpt-*-sol*": 300000}; 0 disables a key. Wins over threshold/autoraise/floor only when it leaves
+        # >= 15% of the input window free, else the ratio stays (agent/compression_model_trigger.py).
+        "model_threshold_tokens": {},
         # Opt-in idle compaction (0 = off): a session resuming after this many idle seconds compacts
         # up front, before the first reply. Time-based complement to `threshold`; skipped when
         # already at/below threshold × target_ratio; honors the same cooldown/ anti-thrash/lock

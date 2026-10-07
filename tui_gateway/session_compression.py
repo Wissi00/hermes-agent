@@ -132,6 +132,8 @@ def _apply_live_compression_config(agent: Any, cfg: dict | None) -> None:
     cc.model_thresholds = {
         str(k): float(v) for k, v in raw_thresholds.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
     } if isinstance(raw_thresholds, dict) else {}
+    from agent.compression_model_trigger import parse_model_threshold_tokens
+    cc.model_threshold_tokens = parse_model_threshold_tokens(compression.get("model_threshold_tokens"))
     # threshold: present value wins; absence derives via the agent_init resolution (default + autoraise).
     # resolve_model_threshold returns ``pct`` unchanged when model_thresholds is empty.
     from agent.context_compressor import resolve_model_threshold

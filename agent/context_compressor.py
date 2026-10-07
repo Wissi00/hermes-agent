@@ -33,6 +33,7 @@ from agent.auxiliary_client import (
 )
 from agent.context_engine import ContextEngine, sanitize_memory_context
 from agent.context_compressor_summary import SummaryDispatchMixin
+from agent.compression_model_trigger import model_trigger_tokens, resolve_model_threshold
 from agent.error_classifier import FailoverReason, classify_api_error
 from agent.micro_compaction import MicroCompactionMixin
 from agent.prompt_builder import STEER_DISPLAY_KIND
@@ -2053,33 +2054,6 @@ def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_conten
     return f"[{tool_name}]{first_arg} ({content_len:,} chars result)" + _result_failure_suffix(content)
 
 
-def _model_threshold_key_rank(key: str, model: str, provider: str) -> "tuple[int, int] | None":
-    """Match rank for one ``model_thresholds`` key, or None when it does not apply.
-    ``"<provider>:<substr>"`` keys apply only on that provider; bare keys apply on every route.
-    The same slug means different windows on different routes (Codex caps Astra at 272K; OpenRouter
-    serves the full window), so a bare ``astra: 0.85`` written for Codex silently leaks everywhere.
-    Rank = (substring length, scoped): the most specific model match wins, scope breaks ties."""
-    scope, sep, substr = key.partition(":")
-    if not sep:
-        return (len(key), 0) if key in model else None
-    return (len(substr), 1) if scope.strip().lower() == provider and substr in model else None
-
-
-def resolve_model_threshold(
-    model: str, model_thresholds: dict[str, float] | None, default: float, provider: str = "",
-) -> float:
-    """Per-model threshold: longest matching ``model_thresholds`` key wins, else ``default``.
-    Keys are substrings of the model name, optionally provider-scoped as ``"<provider>:<substr>"``
-    (a scoped key outranks a bare one of the same substring). Module-level so plugin context
-    engines can reuse it."""
-    if not model_thresholds or not model:
-        return default
-    provider = (provider or "").strip().lower()
-    ranked = ((_model_threshold_key_rank(key, model, provider), key) for key in model_thresholds)
-    best = max(((rank, key) for rank, key in ranked if rank is not None), default=None)
-    return float(model_thresholds[best[1]]) if best else default
-
-
 def _memory_provider_section(memory_context: str) -> str:
     """Prompt block carrying the sanitized memory-provider JSON, or "" when empty."""
     sanitized = sanitize_memory_context(memory_context)
@@ -2317,7 +2291,10 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         if self._threshold_tokens is None:
             # Resolve the window first: it may floor threshold_percent as a side effect.
             _ctx = self.context_length
-            self._threshold_tokens = self._compute_threshold_tokens(_ctx, self.threshold_percent, self.max_tokens)
+            ratio_trigger = self._compute_threshold_tokens(_ctx, self.threshold_percent, self.max_tokens)
+            self._threshold_tokens = self._model_trigger(self.model, self.provider, _ctx, ratio_trigger)
+            if self._threshold_tokens != ratio_trigger:  # absolute trigger: the percent shown must match it
+                self.threshold_percent = self._threshold_tokens / _ctx
             self._apply_threshold_tokens_cap()
         return self._threshold_tokens
 
@@ -2750,11 +2727,23 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         ceiling, which the feasibility probe re-derives per runtime."""
         base_percent = resolve_model_threshold(model, self.model_thresholds, self._config_threshold_percent, provider)
         effective_percent = self._effective_threshold_percent(context_length, base_percent)
-        threshold = self._compute_threshold_tokens(context_length, effective_percent, self.max_tokens)
+        ratio_trigger = self._compute_threshold_tokens(context_length, effective_percent, self.max_tokens)
+        threshold = self._model_trigger(model, provider, context_length, ratio_trigger)
+        if threshold != ratio_trigger:
+            effective_percent = threshold / context_length
         cap = self._effective_threshold_cap(context_length)
         if cap is not None:
             threshold = min(threshold, cap)
         return base_percent, effective_percent, threshold
+
+    def _model_trigger(self, model: str, provider: str, context_length: int, ratio_trigger: int) -> int:
+        """``compression.model_threshold_tokens`` absolute trigger when it fits the window, else the ratio
+        trigger; the verdict is kept on ``model_trigger_status`` for diagnostics."""
+        trigger, self.model_trigger_status = model_trigger_tokens(
+            ratio_trigger, model=model, provider=(provider or "").strip().lower(),
+            mapping=getattr(self, "model_threshold_tokens", None),
+            effective_input_window=self._effective_input_window(context_length, self.max_tokens))
+        return trigger
 
     def _effective_threshold_cap(self, context_length: int) -> int | None:
         """The configured ``threshold_tokens`` cap clamped to the window; None when no cap is configured."""
@@ -2763,7 +2752,11 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
 
     def preview_threshold_tokens(self, model: str, context_length: int, provider: str = "") -> int:
         """The trigger ``update_model`` would install, without mutating state."""
-        return self._derive_trigger(model, context_length, provider)[2]
+        status = getattr(self, "model_trigger_status", None)
+        try:
+            return self._derive_trigger(model, context_length, provider)[2]
+        finally:
+            self.model_trigger_status = status
 
     def update_model(
         self, model: str, context_length: int, base_url: str = "", api_key: Any = "", provider: str = "",
@@ -2900,9 +2893,9 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         base_url: str = "", api_key: str = "", config_context_length: int | None = None, provider: str = "",
         api_mode: str = "", abort_on_summary_failure: bool = False, max_tokens: int | None = None,
         model_thresholds: dict[str, float] | None = None, threshold_tokens_cap: Any = None,
-        proactive_prune_tokens: int = 0, proactive_prune_min_result_chars: int = 8000,
-        proactive_prune_min_reclaim_tokens: int = 4096, min_tail_user_messages: int = 1, tail_mode: str = "lean",
-        custom_providers: list | None = None,
+        model_threshold_tokens: dict[str, int] | None = None, proactive_prune_tokens: int = 0,
+        proactive_prune_min_result_chars: int = 8000, proactive_prune_min_reclaim_tokens: int = 4096,
+        min_tail_user_messages: int = 1, tail_mode: str = "lean", custom_providers: list | None = None,
     ):
         self.model, self.base_url, self.api_key, self.provider, self.api_mode = model, base_url, api_key, provider, api_mode
         # "lean" = small clamped tail + verbatim-user summary section; "legacy" = 0.20*window tail.
@@ -2912,6 +2905,8 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         self.custom_providers = custom_providers or None
         # Per-model overrides (longest substring match wins); floor applied on top.
         self.model_thresholds = model_thresholds or {}
+        # Per-model absolute triggers (glob/substring keys); applied only when they fit the window.
+        self.model_threshold_tokens, self.model_trigger_status = model_threshold_tokens or {}, None
         # Raw config value, before override/floor; fallback when switching to a model with no override.
         self._config_threshold_percent = threshold_percent
         self._base_threshold_percent = resolve_model_threshold(model, self.model_thresholds, threshold_percent, provider)

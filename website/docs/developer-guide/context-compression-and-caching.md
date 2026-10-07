@@ -264,6 +264,7 @@ auxiliary:
 | `threshold` | `0.50` | 0.0-1.0 | Compression triggers when prompt tokens ≥ `threshold × context_length` (floored at 0.75 below 512K windows) |
 | `threshold_tokens` | `null` | int or `null` | Optional absolute cap on the trigger: when set, compaction fires at the lower of the ratio trigger and this count. `null` = ratio-only |
 | `model_thresholds` | `{}` | map | Per-model overrides of `threshold`. Keys are substring-matched against the model name (longest match wins); `"<provider>:<substring>"` keys apply only on that provider. The small-context floor still applies on top (see below) |
+| `model_threshold_tokens` | `{}` (+ built-in `{"gpt-*-sol*": 300000}`) | map of positive ints | Per-model ABSOLUTE triggers in prompt tokens; see [Per-model absolute triggers](#per-model-absolute-triggers) |
 | `target_ratio` | `0.20` | 0.10-0.80 | Controls tail protection token budget: `threshold_tokens × target_ratio` (legacy mode only — `lean` uses its own clamp) |
 | `tail_mode` | `lean` | `lean`, `legacy` | Tail retention policy. `legacy` keeps a `target_ratio`-sized verbatim tail (~100K+ tokens on big-window models). `lean` keeps a clamped tail of `2.5% × context window` (10K floor, 25K cap) and instead carries continuity in the summary: a detailed identifier-preserving session log (produced by the same single summary request — lean compaction makes exactly one auxiliary LLM call per attempt), a mechanically extracted anchor index (PR numbers, SHAs, paths, error strings — regex, never paraphrased), every real user message quoted verbatim (newest-first budget), and a `session_search` recovery pointer so the agent can re-access anything summarized away. Oversized regions are evenly sampled into the summarizer input (with explicit elision markers) rather than triggering extra calls. Result on 500K-token real sessions: ~49K retained vs ~162K, with higher recall when paired with recovery (see `evals/compaction/results/`). Old tool results inside the lean tail are demoted to one-line stubs carrying a recovery pointer |
 | `protect_last_n` | `20` | ≥1 | Minimum number of recent messages always preserved |
@@ -348,6 +349,39 @@ Plugin context engines can reuse the same resolution logic via
 `from agent.context_compressor import resolve_model_threshold`; engines that
 override `update_model()` own their own compaction policy and may ignore the
 map.
+
+### Per-model absolute triggers
+
+`compression.model_threshold_tokens` pins the trigger to a fixed prompt-token
+count for matching models, instead of a fraction of the window. It ships with
+one built-in entry, `"gpt-*-sol*": 300000`: every GPT Sol model (`gpt-6.1-sol`,
+`gpt-6-sol`, `gpt-5.6-sol`, `openai/gpt-6-sol`, dated snapshots, `-900k`
+pickers and future Sol tiers) compacts when the real prompt reaches 300,000
+tokens — 299,999 does not fire, 300,000 does.
+
+```yaml
+compression:
+  model_threshold_tokens:
+    "glm-5.2": 120000          # layered over the built-in Sol entry
+    "gpt-*-sol*": 0            # 0 disables a key, the built-in one included
+```
+
+- Keys follow `model_thresholds` (substring, `"<provider>:..."` scoping) and may
+  also be globs (`*`, `?`, `[...]`), matched anywhere in the model name; the key
+  with the most literal characters wins. Non-matching models keep their ratio.
+- When it applies, the absolute count replaces the ratio trigger outright: the
+  global `threshold`, `model_thresholds`, the Codex autoraise and the
+  small-window floor do not move it. `threshold_tokens` (global cap) and the
+  auxiliary summariser ceiling can still only lower it.
+- It applies only if it leaves at least 15% of the usable input window
+  (`context_length - max_tokens`) free. Otherwise — e.g. Sol on the ChatGPT
+  Codex OAuth route, whose window is 272K — the ratio trigger stays in charge
+  (85% autoraise = 231,200 tokens) and one warning is logged; it never compacts
+  at or past the window. The verdict is on `context_compressor.model_trigger_status`.
+- Absent from the YAML still means the built-in entry, under every loader, so
+  every profile inherits it. Messaging gateways rebuild cached agents when the
+  key changes and the TUI/Desktop adopt it at the next turn; a running process
+  needs a restart to pick up a code change to the built-in default.
 
 ### Codex gpt-5.x / Astra threshold autoraise
 

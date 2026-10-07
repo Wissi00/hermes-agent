@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
 
+from agent.compression_model_trigger import parse_model_threshold_tokens
 from agent.context_compressor import ContextCompressor
 from agent.agent_runtime_helpers import _ra
 from agent.iteration_budget import IterationBudget, normalize_budget_warning_ratio
@@ -1594,8 +1595,8 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
         ),
         protect_first=protect_first,
         abort_on_summary_failure=_cfg_flag(cfg, "abort_on_summary_failure", False),
-        # Per-model threshold overrides: keys substring-matched against the model name
-        # (longest match wins); {} = global threshold for all models.
+        # Per-model ratio overrides / absolute triggers (agent/compression_model_trigger.py).
+        model_threshold_tokens=parse_model_threshold_tokens(cfg.get("model_threshold_tokens")),
         model_thresholds={
             str(k): float(v) for k, v in _cfg_dict(cfg, "model_thresholds").items()
             if isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -2025,9 +2026,8 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
             provider=agent.provider, api_mode=agent.api_mode,
             abort_on_summary_failure=cs.abort_on_summary_failure,
             max_tokens=_compressor_max_tokens(agent), model_thresholds=cs.model_thresholds,
-            threshold_tokens_cap=cs.threshold_tokens,
-            proactive_prune_tokens=cs.proactive_prune_tokens,
-            proactive_prune_min_result_chars=cs.proactive_prune_min_chars,
+            threshold_tokens_cap=cs.threshold_tokens, model_threshold_tokens=cs.model_threshold_tokens,
+            proactive_prune_tokens=cs.proactive_prune_tokens, proactive_prune_min_result_chars=cs.proactive_prune_min_chars,
             proactive_prune_min_reclaim_tokens=cs.proactive_prune_min_reclaim,
             min_tail_user_messages=cs.min_tail_users, tail_mode=cs.tail_mode,
             custom_providers=_custom_providers,
