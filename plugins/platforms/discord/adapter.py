@@ -1300,6 +1300,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             intents.message_content = True
             intents.dm_messages = True
             intents.guild_messages = True
+            intents.reactions = True
             intents.members = _needs_server_members_intent(
                 self._allowed_user_ids, self._allowed_role_ids,
             )
@@ -1376,6 +1377,14 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             @self._client.event
             async def on_message_delete(message: DiscordMessage):
                 await adapter_self._on_platform_message_delete(message)
+
+            @self._client.event
+            async def on_raw_reaction_add(payload):
+                await adapter_self._on_platform_reaction(payload, "added")
+
+            @self._client.event
+            async def on_raw_reaction_remove(payload):
+                await adapter_self._on_platform_reaction(payload, "removed")
 
             @self._client.event
             async def on_thread_create(thread):
@@ -1680,6 +1689,48 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             user_name=None, thread_id=str(thread_id),
             guild_id=str(getattr(guild, "id", "")) if guild else None,
         )
+
+    async def _on_platform_reaction(self, raw, action: str) -> None:
+        """Normalize Discord raw add/remove reactions without requiring a cached message."""
+        def _build():
+            if action not in {"added", "removed"}:
+                return None
+            user_id = getattr(raw, "user_id", None)
+            channel_id = getattr(raw, "channel_id", None)
+            message_id = getattr(raw, "message_id", None)
+            if user_id is None or channel_id is None or message_id is None:
+                return None
+            member = getattr(raw, "member", None)
+            member_user = getattr(member, "_user", None) or getattr(member, "user", None)
+            if getattr(member_user, "bot", False):
+                return None
+            client_user = getattr(getattr(self, "_client", None), "user", None)
+            if client_user is not None and str(user_id) == str(getattr(client_user, "id", "")):
+                return None
+            channel = getattr(getattr(self, "_client", None), "get_channel", lambda _id: None)(channel_id)
+            thread_id, chat_id = self._thread_id_and_chat_for_channel(channel)
+            chat_id = chat_id or str(channel_id)
+            emoji = getattr(raw, "emoji", None)
+            emoji_name = getattr(emoji, "name", None)
+            emoji_id = getattr(emoji, "id", None)
+            guild_id = getattr(raw, "guild_id", None)
+            payload = {
+                "action": action,
+                "chat_id": str(chat_id)[:128],
+                "message_id": str(message_id)[:128],
+                "thread_id": thread_id[:128] if thread_id else None,
+                "user_id": str(user_id)[:128],
+                "emoji": str(emoji_name)[:128] if emoji_name is not None else None,
+                "emoji_id": str(emoji_id)[:128] if emoji_id is not None else None,
+                "guild_id": str(guild_id)[:128] if guild_id is not None else None,
+            }
+            return payload, dict(
+                chat_id=str(chat_id), user_id=str(user_id),
+                user_name=getattr(member, "display_name", None), thread_id=thread_id,
+                guild_id=str(guild_id) if guild_id is not None else None,
+                message_id=str(message_id),
+            )
+        await self._emit_platform_event("reaction", _build)
 
     async def _on_platform_message_edit(self, before, after) -> None:
         """Normalize ``on_message_edit`` into event_type ``message_edited``."""

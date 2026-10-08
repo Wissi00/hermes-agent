@@ -1325,7 +1325,7 @@ Every payload is additive and event-specific; there is no monolithic gateway pay
 
 | `event_type` | Platforms | Payload fields |
 |--------------|-----------|----------------|
-| `reaction` | telegram | `emojis: list[str]`, `custom_emoji_ids: list[str]`, `chat_id: str`, `message_id: str`, `thread_id: str \| None` (Telegram reaction updates carry no topic id, so currently always `None`). |
+| `reaction` | telegram, discord | Telegram: `emojis: list[str]`, `custom_emoji_ids: list[str]`, `chat_id: str`, `message_id: str`, `thread_id: str \| None` (reaction updates carry no topic id, so currently always `None`). Discord: `action: "added" \| "removed"`, `chat_id: str`, `message_id: str`, `thread_id: str \| None`, `user_id: str`, `emoji: str \| None`, `emoji_id: str \| None`, `guild_id: str \| None`; raw reaction events work even when the message is not cached. |
 | `message_edited` | telegram, discord | `chat_id: str`, `message_id: str`, `thread_id: str \| None`, `text: str \| None` (edited text or caption, bounded; `None` for media-only edits or when uncached), `edited_at: str \| None` (ISO 8601). |
 | `message_deleted` | discord | `chat_id: str`, `message_id: str`, `thread_id: str \| None`, `author_id: str \| None`. Discord's delete event does not identify the deleter; the authorized source is the deleted message's author, and uncached deletions never fire. |
 | `thread_created` | discord | `thread_id: str`, `parent_chat_id: str \| None`, `name: str \| None`, `owner_id: str \| None`. |

@@ -113,6 +113,21 @@ def _message(
     )
 
 
+def _reaction(*, action_user_id=777, channel_id=555, message_id=456, emoji="✅", emoji_id=None, bot=False):
+    member = SimpleNamespace(
+        display_name="user",
+        user=SimpleNamespace(id=action_user_id, bot=bot),
+    )
+    return SimpleNamespace(
+        user_id=action_user_id,
+        channel_id=channel_id,
+        message_id=message_id,
+        guild_id=999,
+        emoji=SimpleNamespace(name=emoji, id=emoji_id),
+        member=member,
+    )
+
+
 def _thread_obj(*, thread_id=321, name="my thread", owner_id=777, parent_id=555):
     t = _DiscordThread()
     t.id = thread_id
@@ -136,6 +151,56 @@ def _capture(a):
 
     a.set_platform_event_handler(observe)
     return seen
+
+
+class TestReaction:
+    def test_owner_reaction_normalized_and_fired(self):
+        a = _adapter()
+        a._client = SimpleNamespace(user=SimpleNamespace(id=42), get_channel=lambda _id: None)
+        seen = _capture(a)
+
+        asyncio.run(a._on_platform_reaction(_reaction(), "added"))
+
+        event, source = seen[0]
+        assert event == {
+            "platform": "discord",
+            "event_type": "reaction",
+            "payload": {
+                "action": "added",
+                "chat_id": "555",
+                "message_id": "456",
+                "thread_id": None,
+                "user_id": "777",
+                "emoji": "✅",
+                "emoji_id": None,
+                "guild_id": "999",
+            },
+        }
+        assert source.user_id == "777"
+        assert source.chat_id == "555"
+
+    def test_removed_reaction_is_distinct_and_custom_emoji_supported(self):
+        a = _adapter()
+        a._client = SimpleNamespace(user=SimpleNamespace(id=42), get_channel=lambda _id: None)
+        seen = _capture(a)
+
+        asyncio.run(a._on_platform_reaction(_reaction(emoji="approve", emoji_id=123), "removed"))
+
+        assert seen[0][0]["payload"]["action"] == "removed"
+        assert seen[0][0]["payload"]["emoji"] == "approve"
+        assert seen[0][0]["payload"]["emoji_id"] == "123"
+
+    def test_bot_and_malformed_reactions_drop(self):
+        a = _adapter()
+        a._client = SimpleNamespace(user=SimpleNamespace(id=42), get_channel=lambda _id: None)
+        seen = _capture(a)
+
+        asyncio.run(a._on_platform_reaction(_reaction(bot=True), "added"))
+        malformed = _reaction()
+        malformed.message_id = None
+        asyncio.run(a._on_platform_reaction(malformed, "added"))
+
+        assert seen == []
 
 
 class TestMessageEdited:
